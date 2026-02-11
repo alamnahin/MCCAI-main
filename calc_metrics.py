@@ -19,11 +19,14 @@ def calculate_metrics():
     model.eval()
     
     # Setup Scorers
-    scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
+    scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
     chencherry = SmoothingFunction()
     
+    bleu1_scores = []
     bleu4_scores = []
-    rouge_scores = []
+    rouge1_scores = []
+    rouge2_scores = []
+    rougeL_scores = []
     
     print("Generating reports and calculating metrics...")
     
@@ -32,26 +35,42 @@ def calculate_metrics():
             images = batch['image'].to(Config.DEVICE)
             gt_report = batch['gt_report'][0]
             
-            # Generate
+            # Generate (no_repeat_ngram_size passed via **kwargs)
             gen_ids = model.report_gen.generate_report(images, max_length=64, num_beams=4, no_repeat_ngram_size=2)
             gen_report = model.report_gen.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
             
-            # 1. BLEU-4
+            # BLEU scores
             ref_tokens = gt_report.lower().split()
             hyp_tokens = gen_report.lower().split()
             if len(hyp_tokens) > 0:
-                b4 = sentence_bleu([ref_tokens], hyp_tokens, smoothing_function=chencherry.method1)
+                b1 = sentence_bleu([ref_tokens], hyp_tokens, weights=(1, 0, 0, 0),
+                                   smoothing_function=chencherry.method1)
+                b4 = sentence_bleu([ref_tokens], hyp_tokens,
+                                   smoothing_function=chencherry.method1)
+                bleu1_scores.append(b1)
                 bleu4_scores.append(b4)
             
-            # 2. ROUGE-L
-            r_score = scorer.score(gt_report, gen_report)['rougeL'].fmeasure
-            rouge_scores.append(r_score)
-            
+            # ROUGE scores
+            r_scores = scorer.score(gt_report, gen_report)
+            rouge1_scores.append(r_scores['rouge1'].fmeasure)
+            rouge2_scores.append(r_scores['rouge2'].fmeasure)
+            rougeL_scores.append(r_scores['rougeL'].fmeasure)
+    
+    metrics = {
+        'bleu1': sum(bleu1_scores) / len(bleu1_scores) if bleu1_scores else 0.0,
+        'bleu4': sum(bleu4_scores) / len(bleu4_scores) if bleu4_scores else 0.0,
+        'rouge1': sum(rouge1_scores) / len(rouge1_scores) if rouge1_scores else 0.0,
+        'rouge2': sum(rouge2_scores) / len(rouge2_scores) if rouge2_scores else 0.0,
+        'rougeL': sum(rougeL_scores) / len(rougeL_scores) if rougeL_scores else 0.0,
+    }
+    
     print("\n" + "="*30)
     print("FINAL REPORT METRICS")
     print("="*30)
-    print(f"BLEU-4:  {sum(bleu4_scores)/len(bleu4_scores):.4f}")
-    print(f"ROUGE-L: {sum(rouge_scores)/len(rouge_scores):.4f}")
+    for k, v in metrics.items():
+        print(f"{k}:  {v:.4f}")
+    
+    return metrics
 
 if __name__ == '__main__':
     calculate_metrics()

@@ -199,9 +199,10 @@ class EarlyStopping:
         self.best_model = None
     
     def __call__(self, score, model):
+        import copy
         if self.best_score is None:
             self.best_score = score
-            self.best_model = model.state_dict().copy()
+            self.best_model = copy.deepcopy(model.state_dict())
             return True
         
         if self.mode == 'max':
@@ -211,7 +212,7 @@ class EarlyStopping:
         
         if improved:
             self.best_score = score
-            self.best_model = model.state_dict().copy()
+            self.best_model = copy.deepcopy(model.state_dict())
             self.counter = 0
             return True
         else:

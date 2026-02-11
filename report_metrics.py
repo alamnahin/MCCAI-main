@@ -112,9 +112,9 @@ def run_table3_report_quality():
     logger.info("TABLE 3: REPORT GENERATION QUALITY")
     logger.info("="*80)
     
-    from report_metrics import run_report_evaluation
+    from calc_metrics import calculate_metrics
     
-    metrics = run_report_evaluation()
+    metrics = calculate_metrics()
     
     print("\n" + "="*80)
     print("TABLE 3: Report Quality Metrics")

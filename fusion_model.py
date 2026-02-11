@@ -84,14 +84,17 @@ class CrossModalFusion(nn.Module):
         # Squeeze sequence dimension
         fused = ffn_out.squeeze(1)  # [B, 512]
         
-        # FIX: Apply gating mechanism
-        text_pooled = text_features.mean(dim=1)  # [B, 768]
-        text_proj_gate = self.text_proj(text_pooled)  # [B, 512]
+        # Apply gating mechanism (if gate is available)
+        if self.gate is not None:
+            text_pooled = text_features.mean(dim=1)  # [B, 768]
+            text_proj_gate = self.text_proj(text_pooled)  # [B, 512]
+            
+            gate_input = torch.cat([img_features, text_proj_gate], dim=-1)  # [B, 1024]
+            g = self.gate(gate_input)  # [B, 512]
+            
+            return g * img_features + (1 - g) * fused
         
-        gate_input = torch.cat([img_features, text_proj_gate], dim=-1)  # [B, 1024]
-        g = self.gate(gate_input)  # [B, 512]
-        
-        return g * img_features + (1 - g) * fused
+        return fused
 
 
 class RadGen(nn.Module):

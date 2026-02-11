@@ -11,18 +11,12 @@ class ImageEncoderWrapper(nn.Module):
     def __init__(self, swin_model, fusion_dim=512):
         super().__init__()
         self.backbone = swin_model
-        # Swin Base has 1024 hidden units, project to 512 for fusion
         self.proj = nn.Linear(1024, fusion_dim)
     
     def forward(self, x):
-        # 1. Forward pass through Swin
         out = self.backbone(x)
-        
-        # 2. Global Average Pooling on the sequence: [B, 49, 1024] -> [B, 1024]
         features = out.last_hidden_state.mean(dim=1)
-        
-        # 3. Project to fusion dimension
-        return self.proj(features)  # [B, 512]
+        return self.proj(features)
 
 class ReportGenerator(nn.Module):
     """
@@ -30,56 +24,89 @@ class ReportGenerator(nn.Module):
     """
     def __init__(self):
         super().__init__()
-        # 1. Image Encoder (Swin Base)
         self.swin = SwinModel.from_pretrained('microsoft/swin-base-patch4-window7-224')
         
-        # 2. Report Decoder (BART Base)
-        self.bart = BartForConditionalGeneration.from_pretrained('facebook/bart-base')
+        # BEST FIX: Use eager attention to avoid SDPA dimension constraints
+        self.bart = BartForConditionalGeneration.from_pretrained(
+            'facebook/bart-base',
+            attn_implementation="eager"  # Disables SDPA, uses standard attention
+        )
         self.tokenizer = BartTokenizer.from_pretrained('facebook/bart-base')
         
-        # 3. Adapter: Project Swin features (1024) to BART embedding size (768)
-        # FIX: Added LayerNorm and GELU per paper description
+        # Adapter: Project Swin features to BART embedding size
         self.bart_proj = nn.Sequential(
             nn.Linear(1024, 768),
             nn.LayerNorm(768),
             nn.GELU()
         )
         
-        # 4. Expose image encoder for the Fusion module (expects [B, 512])
         self.image_encoder = ImageEncoderWrapper(self.swin, fusion_dim=512)
         
     def forward(self, images, input_ids, attention_mask, labels=None):
         """
         Training step: Returns BART loss
         """
-        # Get image patch embeddings [B, 49, 1024]
+        # Get image features [B, 49, 1024]
         swin_out = self.swin(images)
         visual_embeds = self.bart_proj(swin_out.last_hidden_state)  # [B, 49, 768]
         
-        # BART Forward pass
+        # Create encoder attention mask
+        encoder_attention_mask = torch.ones(
+            visual_embeds.size()[:2],
+            dtype=torch.long,
+            device=visual_embeds.device
+        )
+        
+        # Process through BART's encoder
+        encoder_outputs = self.bart.model.encoder(
+            inputs_embeds=visual_embeds,
+            attention_mask=encoder_attention_mask,
+            return_dict=True
+        )
+        
+        # Call BART with processed encoder outputs
+        # FIX: attention_mask = encoder mask (length 49), decoder_attention_mask = text mask (length 64)
         outputs = self.bart(
             input_ids=input_ids,
-            attention_mask=attention_mask,
-            encoder_outputs=(visual_embeds,),  # FIX: Proper encoder_outputs format
+            attention_mask=encoder_attention_mask,
+            decoder_attention_mask=attention_mask,
+            encoder_outputs=encoder_outputs,
             labels=labels
         )
         return outputs
 
-    def generate_report(self, images, max_length=64, num_beams=4):
+    def generate_report(self, images, max_length=64, num_beams=4, **kwargs):
         """
         Inference step: Generates text token IDs
         """
-        # Get image features
         swin_out = self.swin(images)
         visual_embeds = self.bart_proj(swin_out.last_hidden_state)
         
-        # FIX: Use BaseModelOutput for proper generation
-        encoder_outputs = BaseModelOutput(last_hidden_state=visual_embeds)
+        # Create encoder attention mask
+        encoder_attention_mask = torch.ones(
+            visual_embeds.size()[:2],
+            dtype=torch.long,
+            device=visual_embeds.device
+        )
         
+        # Process through encoder
+        encoder_outputs = self.bart.model.encoder(
+            inputs_embeds=visual_embeds,
+            attention_mask=encoder_attention_mask,
+            return_dict=True
+        )
+        
+        # Generate
+        # FIX: Pass attention_mask (encoder mask) instead of non-standard encoder_attention_mask
         generated_ids = self.bart.generate(
             encoder_outputs=encoder_outputs,
+            attention_mask=encoder_attention_mask,
             max_length=max_length,
             num_beams=num_beams,
-            early_stopping=True
+            early_stopping=True,
+            decoder_start_token_id=self.bart.config.decoder_start_token_id,
+            eos_token_id=self.bart.config.eos_token_id,
+            pad_token_id=self.bart.config.pad_token_id,
+            **kwargs
         )
         return generated_ids

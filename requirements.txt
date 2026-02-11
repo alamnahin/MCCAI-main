@@ -1,0 +1,26 @@
+# Core
+torch
+torchvision
+numpy
+pandas
+Pillow
+tqdm
+
+# Transformers
+transformers
+accelerate
+
+# Metrics
+scikit-learn
+rouge-score
+nltk
+
+# Visualization
+matplotlib
+seaborn
+
+# Optional for full report metrics
+pycocoevalcap
+
+# Utilities
+pathlib
